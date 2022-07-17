@@ -1,0 +1,36 @@
+{
+  "name": "dublr-dapp",
+  "version": "1.0.0",
+  "source": "src/index.html",
+  "scripts": {
+    "start": "rimraf .parcel-cache ../dublr.github.io/* ; parcel src/index.html",
+    "deploy": "rimraf .parcel-cache ../dublr.github.io/* ; parcel build src/index.html ; cd ../dublr.github.io ; git add . ; git commit -am Updates ; git push ; cd -"
+  },
+  "targets": {
+    "default": {
+      "includeNodeModules": true,
+      "distDir": "../dublr.github.io",
+      "optimize": false
+    }
+  },
+  "dependencies": {
+    "@coinbase/wallet-sdk": "^3.5.3",
+    "@walletconnect/web3-provider": "^1.8.0",
+    "ethers": "^5.7.2",
+    "idb-keyval": "^6.2.0",
+    "web3modal": "^1.9.9"
+  },
+  "devDependencies": {
+    "assert": "^2.0.0",
+    "https-browserify": "^1.0.0",
+    "os-browserify": "^0.3.0",
+    "parcel": "^2.7.0",
+    "path-browserify": "^1.0.1",
+    "querystring-es3": "^0.2.1",
+    "rimraf": "^3.0.2",
+    "source-map-support": "^0.5.21",
+    "stream-http": "^3.2.0",
+    "url": "^0.11.0",
+    "xhr2-cookies": "^1.1.0"
+  }
+}
