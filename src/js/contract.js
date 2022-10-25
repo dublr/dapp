@@ -5,10 +5,10 @@ export const dublrAddr = {
     
     // 137: Polygon mainnet
     // Deployed from git commit: eb50917365bbbb0d948efe656610c5abe06aa3d8
-    137: "0x3D739A2db4F42632ca090a7a6713a9A62DB994C0",
+    "137": "0x3D739A2db4F42632ca090a7a6713a9A62DB994C0",
     
     // 80001: Mumbai testnet
-    80001: "0x20518b3443916A0A39093f6a12071Bff517Fb2E5"
+    "80001": "0x20518b3443916A0A39093f6a12071Bff517Fb2E5"
 };
 
 export const dublrABI =

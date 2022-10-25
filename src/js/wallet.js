@@ -106,14 +106,17 @@ async function onChainChanged(chainId) {
     // RPC behavior (and it is possible that other wallets have the same buggy behavior). So despite
     // the fact that this dapp can itself respond without issue to changes in chainId, we have to reload
     // the page if chainId changes.
-    // dataflow.set({ chainId: chainId });
+    // chainIdInt = !chainId ? undefined : ethers.BigNumber.from(chainId).toNumber();
+    // dataflow.set({ chainId: chainIdInt });
     window.location.reload();
 }
 
 async function onConnect(info) {
     walletAddr = await getWallet();
-    chainIdInt = new Number(info.chainId.toString());
-    dataflow.set({ chainId: info.chainId, wallet: walletAddr });
+    const chainId = info.chainId;
+    chainIdInt = !chainId ? undefined : ethers.BigNumber.from(chainId).toNumber();
+    const chainIdInt = !info.chainId ? undefined : ethers.BigNumber.from(info.chainId).toNumber();
+    dataflow.set({ chainId: chainIdInt, wallet: walletAddr });
 }
 
 async function onDisconnect(error) {
@@ -162,7 +165,9 @@ async function onConnectToProvider(provider) {
     } catch (e) {
         walletAddr = undefined;
     }
-    chainIdInt = new Number(web3ModalProvider.chainId.toString());
+    
+    var chainId = web3ModalProvider.chainId;
+    chainIdInt = !chainId ? undefined : ethers.BigNumber.from(chainId).toNumber();
 
     const nameOfWallet = walletName();
     const dublrContractAddr = dublrAddr[chainIdInt];
@@ -173,7 +178,7 @@ async function onConnectToProvider(provider) {
     web3ModalProvider.on("disconnect", onDisconnect);
     
     // If wallet is connected to anything other than Polygon mainnet
-    if (chainIdInt != 137) {
+    if (chainIdInt !== 137) {
         // Switch wallet to Polygon mainnet before notifying dataflow network of connection
         try {
             // check if the chain to connect to is installed
@@ -208,19 +213,9 @@ async function onConnectToProvider(provider) {
     }
 
     // Notify dataflow network of connection
-    let chainId;
-    try {
-        if (web3ModalProvider?.getNetwork) {
-            chainId = (await web3ModalProvider.getNetwork())?.chainId;
-            chainIdInt = new Number(chainId.toString());
-        }
-    } catch (e) {
-        // chainId has invalid format
-        chainId = undefined;
-    }
     await dataflow.set({
         web3ModalProvider,
-        chainId,
+        chainId: chainIdInt,
         wallet: walletAddr
     });
     

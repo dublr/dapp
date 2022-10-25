@@ -13,6 +13,12 @@ window.ethers = ethers;
 
 // Event handlers -------------------------------------------------------------
 
+function onBlock(blockNumber) {
+    // Currently ignored
+}
+
+let highestBlockNumber;
+
 function onDublrEvent(log, event) {
     // Listen to all DUBLR events, and set dublrStateTrigger to the block number of any events
     // that are emitted. Using the block number as the state trigger will cause only one dataflow
@@ -20,12 +26,43 @@ function onDublrEvent(log, event) {
     // Ignore log entries without block numbers (this includes RPC errors, such as reverted
     // transactions)
     if (log?.blockNumber) {
-        dataflow.set({ dublrStateTrigger: log.blockNumber });
+        // Schedule dublrStateTrigger to be triggered at the next block (on Polygon, changes can
+        // only be read from the contract after the block in the log has been committed, i.e.
+        // after the next block has been mined).
+        // Unfortunately on Polygon, blocks (with 2-3 second intervals) are aggregated into
+        // ~15-second chunks, probably by Ethers polling the blockchain every 15 seconds or
+        // something. Therefore, it takes up to 15 seconds for the UI to update after the contract
+        // has changed.
+        // Only trigger dublrStateTrigger once, even if there are multiple logs for a block
+        if (!highestBlockNumber || log.blockNumber > highestBlockNumber) {
+            highestBlockNumber = log.blockNumber;
+            new Promise(async () => {
+                // Mine the next block asynchronously
+                try {
+                    await ethers.provider.send("evm_mine");
+                } catch (e) {}
+                // Once the next block is mined, mark dublrStateTrigger as changed
+                dataflow.set({ dublrStateTrigger: log.blockNumber });
+            });
+        }
     }
 }
 
+function parseChainId(chainId) {
+    try {
+        return !chainId ? undefined : ethers.BigNumber.from(chainId).toNumber();
+    } catch (e) {
+        return undefined;
+    }
+}
+
+function getDublrAddr(chainId) {
+    const chainIdInt = parseChainId(chainId);
+    return chainIdInt ? dublrAddr[chainIdInt.toString()] : undefined;
+}
+
 function onNetwork(newNetwork, oldNetwork) {
-    dataflow.set({ chainId: newNetwork.chainId });
+    dataflow.set({ chainId: parseChainId(newNetwork.chainId) });
 }
 
 // Formatting and utility functions -------------------------------------------
@@ -347,7 +384,8 @@ async function rpcCall(promiseFn) {
 }
 
 async function runTransaction(dublr, transactionPromise, submittedFn,
-        task, insufficientBalanceSuggestion, gasLimitSuggestion) {
+        task, insufficientBalanceSuggestion, gasLimitSuggestion,
+        networkCurrency) {
     let result;
     let transactionResponse;
     let receipt;
@@ -401,7 +439,8 @@ async function runTransaction(dublr, transactionPromise, submittedFn,
             if (reasonLower.includes("replaced")) {
                 warningText = "Transaction was replaced by another transaction";
             } else if (reasonLower.includes("insufficient funds")) {
-                warningText = "Insufficient wallet ETH balance" + insufficientBalanceSuggestion;
+                warningText = "Insufficient wallet " + (networkCurrency ? networkCurrency : "")
+                        + " balance" + insufficientBalanceSuggestion;
             } else if (reasonLower.includes("out of gas")) {
                 warningText = "Gas limit exceeded" + gasLimitSuggestion;
             } else if (reasonLower.includes("user denied transaction")
@@ -442,25 +481,28 @@ async function runTransaction(dublr, transactionPromise, submittedFn,
 
 async function estimateGas(dublr, estimateGasPromise,
         gasPriceNWCWEI, balanceAvailForGasNWCWEI, blockGasLimit,
-        task, insufficientBalanceSuggestion, gasLimitSuggestion) {
+        task, insufficientBalanceSuggestion, gasLimitSuggestion,
+        networkCurrency) {
     if (!dublr || !gasPriceNWCWEI) {
         return undefined;
     }
     const transactionResult = await runTransaction(dublr,
-            estimateGasPromise, () => {}, task, insufficientBalanceSuggestion, gasLimitSuggestion);
+            estimateGasPromise, () => {}, task, insufficientBalanceSuggestion, gasLimitSuggestion,
+            networkCurrency);
     let gasEstRaw = transactionResult.result;
     let warningText = transactionResult?.warningText || "";
     let gasEstNWCWEI;
     if (gasEstRaw && gasPriceNWCWEI) {
         // Calculate gas expenditure by multiplying by gas price
         gasEstNWCWEI = gasEstRaw.mul(gasPriceNWCWEI);
-        // Warn if ETH amount plus estimated gas is less than ETH balance
+        // Warn if NWC amount plus estimated gas is less than NWC balance
         if (gasEstNWCWEI.gt(balanceAvailForGasNWCWEI)) {
             // Really this should be caught by the transaction reverting, but double-check
             if (warningText.length > 0) {
                 warningText += "; ";
             }
-            warningText += "Insufficient wallet ETH balance to cover gas cost" + insufficientBalanceSuggestion;
+            warningText += "Insufficient wallet " + (networkCurrency ? networkCurrency : "")
+                    + " balance to cover gas cost" + insufficientBalanceSuggestion;
         } else if (blockGasLimit.gt(0) && gasEstRaw.gt(blockGasLimit)) {
             // Shouldn't get triggered since the above transaction should fail if the block gas limit
             // is exceeded
@@ -488,8 +530,7 @@ const dataflowNodes = {
     provider: async (web3ModalProvider) => {
         // Remove listeners from current provider, if any
         if (currProvider) {
-            const chainIdInt = new Number(currProvider.chainId?.toString());
-            const dublrContractAddr = dublrAddr[chainIdInt];
+            const dublrContractAddr = getDublrAddr(currProvider.chainId);
             if (currProvider.removeAllListeners) {
                 currProvider.removeAllListeners();
             } else if (currProvider.off) {
@@ -497,14 +538,14 @@ const dataflowNodes = {
                     currProvider.off({ address: dublrContractAddr }, onDublrEvent);
                 }
                 currProvider.off("network", onNetwork);
+                currProvider.off("block", onBlock);
             }
             currProvider = undefined;
         }
         
         // Add new provider
         if (web3ModalProvider) {
-            const chainIdInt = new Number(web3ModalProvider.chainId?.toString());
-            const dublrContractAddr = dublrAddr[chainIdInt];
+            const dublrContractAddr = getDublrAddr(web3ModalProvider.chainId);
             // "any" parameter: https://github.com/ethers-io/ethers.js/discussions/1480
             // (Although this is not really needed because the app is refreshed if chainId changes)
             currProvider = new ethers.providers.Web3Provider(web3ModalProvider, "any");
@@ -512,6 +553,7 @@ const dataflowNodes = {
                 currProvider.on({ address: dublrContractAddr }, onDublrEvent);
             }
             currProvider.on("network", onNetwork);
+            currProvider.on("block", onBlock);
             
             // Some providers don't set the accounts, need to actively query this here
             const accounts = await rpcCall(() => currProvider.listAccounts?.());
@@ -526,7 +568,7 @@ const dataflowNodes = {
         const network = await rpcCall(() => provider?.getNetwork());
         if (network) {
             // Some providers don't set the chainId, need to actively query this here
-            dataflow.set({ chainId: network.chainId });
+            dataflow.set({ chainId: parseChainId(network.chainId) });
         }
         return network;
     },
@@ -540,7 +582,7 @@ const dataflowNodes = {
     },
 
     networkCurrency: async (network) => {
-        switch (network?.chainId) {
+        switch (parseChainId(network?.chainId)) {
             case 1: return "ETH";
             case 5: return "ETH"; // GoerliETH
             case 137: return "MATIC";
@@ -550,7 +592,7 @@ const dataflowNodes = {
     },
 
     scanAddress: async (network) => {
-        switch (network?.chainId) {
+        switch (parseChainId(network?.chainId)) {
             case 1: return "https://etherscan.io/";
             case 5: return "https://goerli.etherscan.io/";
             case 137: return "https://polygonscan.com/";
@@ -562,7 +604,7 @@ const dataflowNodes = {
     dublr: async (provider, chainId, networkName, scanAddress, wallet) => {
         var dublrContractAddr;
         if (provider && wallet && chainId && networkName) {
-            dublrContractAddr = dublrAddr[new Number(chainId.toString())];
+            dublrContractAddr = getDublrAddr(chainId);
             if (!dublrContractAddr) {
                 dataflow.set({
                     networkInfo_out: "Wallet is connected to network: <span class='num'>" + networkName + "</span>."
@@ -606,7 +648,8 @@ const dataflowNodes = {
     },
 
     contractVals: async (dublr, wallet, dublrStateTrigger, priceTimerTrigger) => {
-        if (!dublr) {
+        console.log("contractVals");
+        if (!dublr || !wallet) {
             return undefined;
         }
         let values = await rpcCall(() => dublr.callStatic.getStaticCallValues());
@@ -717,8 +760,35 @@ const dataflowNodes = {
     },
 
     gasPriceNWCWEI: async (provider, chainId, priceTimerTrigger, dublrStateTrigger) => {
-        // Get gas price -- options: gasPrice, maxFeePerGas, maxPriorityFeePerGas
-        return !provider ? undefined : await rpcCall(async () => (await provider.getFeeData())?.maxFeePerGas);
+        let gasPrice;
+        if (chainId === 137 || chainId === 80001) {
+            // Polygon needs a gas station, because it does not yet properly implement EIP-1559
+            try {
+                const res = await (await fetch('https://gasstation-mainnet.matic.network/v2')).json();
+                // Increase the max fee by 20%, because gas station is sometimes wrong
+                const maxFee = Math.round(1.2 * res?.standard?.maxFee * 1e9);
+                if (maxFee) {
+                    gasPrice = ethers.BigNumber.from(maxFee);
+                }
+                // Set gasPrice to max of maxFee and 1.5 times the base fee, because the base fee
+                // can fluctuate, and there is an RPC error if the specified gas price is lower
+                // than the base fee.
+                const baseFee = Math.round(1.5 * res?.estimatedBaseFee * 1e9);
+                if (baseFee && (!gasPrice || baseFee.gt(maxFee))) {
+                    gasPrice = baseFee;
+                }
+            } catch (e) {}
+        }
+        if (!gasPrice && provider) {
+            // If not connected to Polygon network, or Polygon gas station fails, then use Provider to
+            // estimate gas price. Options: gasPrice, maxFeePerGas, maxPriorityFeePerGas.
+            gasPrice = await rpcCall(async () => (await provider.getFeeData())?.maxFeePerGas);
+            if (gasPrice && (chainId === 137 || chainId === 80001)) {
+                // On Polygon, double the gas price, since in times of congestion, the estimates are wrong
+                gasPrice = gasPrice.mul(2);
+            }
+        }
+        return gasPrice;
     },
 
     // Validation functions for dataflow input from DOM -----------------------------
@@ -749,11 +819,12 @@ const dataflowNodes = {
                 warningText = "Amount must be greater than zero";
                 amountNWCWEI = undefined;
             } else if (contractVals?.balanceNWCWEI === undefined) {
-                // Only output amount if ETH balance of wallet is known, since the amount
+                // Only output amount if NWC balance of wallet is known, since the amount
                 // has to be smaller than the balance. But still clear the warning text.
                 amountNWCWEI = undefined;
             } else if (!amountNWCWEI.lt(contractVals.balanceNWCWEI)) {
-                warningText = "Amount must be less than wallet ETH balance";
+                warningText = "Amount must be less than wallet " + (networkCurrency ? networkCurrency : "")
+                        + " balance";
                 // The amount specified is unusable, so don't propagate it
                 amountNWCWEI = undefined;
             } else if (contractVals?.minSellOrderValueNWCWEI !== undefined
@@ -794,7 +865,7 @@ const dataflowNodes = {
                 warningText = "Price too large";
             } else {
                 try {
-                    priceNWCPerDUBLR_x1e9 = ethers.BigNumber.from(Math.floor(price * 1e9));
+                    priceNWCPerDUBLR_x1e9 = ethers.BigNumber.from(Math.round(price * 1e9));
                 } catch (e) {
                     // Ignore
                 }
@@ -812,7 +883,8 @@ const dataflowNodes = {
     },
 
     sellAmountDUBLRWEI: async (sellAmount_in, contractVals,
-            listPriceNWCPerDUBLR_x1e9, totAvailableSellerBalanceDUBLRWEI) => {
+            listPriceNWCPerDUBLR_x1e9, totAvailableSellerBalanceDUBLRWEI,
+            networkCurrency) => {
         if (sellAmount_in === undefined) {
             dataflow.set({ sellAmountWarning_out: "" });
             return undefined;
@@ -838,7 +910,8 @@ const dataflowNodes = {
                     warningText = "Amount cannot be greater than "
                             + (hasSellOrder ? "(wallet DUBLR balance) + (amount of active sell order) = "
                                     : "wallet balance of ")
-                            + weiToEthSF(totAvailableSellerBalanceDUBLRWEI) + " DUBLR";
+                            + weiToEthSF(totAvailableSellerBalanceDUBLRWEI)
+                            + " " + (networkCurrency ? networkCurrency : "");
                     amountDUBLRWEI = undefined;
                 }
             } else {
@@ -849,13 +922,14 @@ const dataflowNodes = {
             if (warningText === ""
                     && contractVals?.minSellOrderValueNWCWEI
                     && listPriceNWCPerDUBLR_x1e9 && !listPriceNWCPerDUBLR_x1e9.isZero()) {
-                // Check if the ETH value of the sell order would exceed the minimum value requirement.
+                // Check if the NWC value of the sell order would exceed the minimum value requirement.
                 const minSellOrderValueDUBLRWEI = ethToDublr(
                         listPriceNWCPerDUBLR_x1e9, contractVals.minSellOrderValueNWCWEI);
                 if (amountDUBLRWEI.lt(minSellOrderValueDUBLRWEI)) {
                     warningText = "Amount cannot be smaller than ("
                             + weiToEthSF(contractVals.minSellOrderValueNWCWEI) + " ETH) / (list price) = "
-                            + weiToEthSF(minSellOrderValueDUBLRWEI) + " DUBLR";
+                            + weiToEthSF(minSellOrderValueDUBLRWEI)
+                            + " " + (networkCurrency ? networkCurrency : "");
                     amountDUBLRWEI = undefined;
                 }
             } else {
@@ -1341,9 +1415,9 @@ const dataflowNodes = {
 
     buyButtonParams: async (dublr, contractVals,
             buyAmountNWCWEI, minimumTokensToBuyOrMintDUBLRWEI,
-            amountBoughtEstDUBLRWEI, allowBuying, allowMinting, buyGasEst,
+            amountBoughtEstDUBLRWEI, allowBuying, allowMinting, buyGasEst, gasPriceNWCWEI,
             networkCurrency, priceUSDPerCurrency, termsBuy_in) => {
-        const gasLimit = buyGasEst?.gasEstRaw || contractVals?.blockGasLimit;
+        const gasLimit = buyGasEst?.gasEstRaw || contractVals?.blockGasLimit || 2e7;
         const disabled = !dublr
                 // One of buying or minting must be enabled on the DEX
                 || contractVals === undefined
@@ -1365,13 +1439,9 @@ const dataflowNodes = {
         return disabled ? undefined : {
             // Group all dependencies together in a single object, so that they can be accessed
             // atomically by the button's onclick handler.
-            // For some reason, setting gasLimit to the result of estimateGas can cause an
-            // out of gas error, so just let Ethers estimate gas instead
-            dublr: dublr, buyAmountNWCWEI: buyAmountNWCWEI, // gasLimit: gasLimit,
-            minimumTokensToBuyOrMintDUBLRWEI: minimumTokensToBuyOrMintDUBLRWEI,
-            allowBuying: allowBuying, allowMinting: allowMinting,
-            networkCurrency: networkCurrency,
-            priceUSDPerCurrency: priceUSDPerCurrency,
+            dublr, buyAmountNWCWEI, minimumTokensToBuyOrMintDUBLRWEI,
+            allowBuying, allowMinting,
+            gasPriceNWCWEI, networkCurrency, priceUSDPerCurrency
         };
     },
 
@@ -1382,9 +1452,9 @@ const dataflowNodes = {
     },
 
     sellButtonParams: async (dublr, contractVals,
-            listPriceNWCPerDUBLR_x1e9, sellAmountDUBLRWEI,
-            sellGasEst, networkCurrency, priceUSDPerCurrency, termsSell_in) => {
-        const gasLimit = sellGasEst?.gasEstRaw || contractVals?.blockGasLimit;
+            listPriceNWCPerDUBLR_x1e9, sellAmountDUBLRWEI, sellGasEst, gasPriceNWCWEI,
+            networkCurrency, priceUSDPerCurrency, termsSell_in) => {
+        const gasLimit = sellGasEst?.gasEstRaw || contractVals?.blockGasLimit || 2e7;
         const disabled = !dublr
                 // Selling must be enabled on the DEX
                 || contractVals === undefined || !contractVals.sellingEnabled
@@ -1401,12 +1471,8 @@ const dataflowNodes = {
         return disabled ? undefined : {
             // Group all dependencies together in a single object, so that they can be accessed
             // atomically by the button's onclick handler
-            // For some reason, setting gasLimit to the result of estimateGas can cause an out of gas error,
-            // so just let Ethers estimate gas instead
-            dublr: dublr, listPriceNWCPerDUBLR_x1e9: listPriceNWCPerDUBLR_x1e9,
-            sellAmountDUBLRWEI: sellAmountDUBLRWEI, // gasLimit: gasLimit,
-            networkCurrency: networkCurrency,
-            priceUSDPerCurrency: priceUSDPerCurrency,
+            dublr, listPriceNWCPerDUBLR_x1e9,
+            sellAmountDUBLRWEI, gasPriceNWCWEI, networkCurrency, priceUSDPerCurrency
         };
     },
 
@@ -1417,8 +1483,9 @@ const dataflowNodes = {
     },
 
     cancelButtonParams: async (dublr, contractVals,
-            cancelGasEst, networkCurrency, priceUSDPerCurrency) => {
-        const gasLimit = cancelGasEst?.gasEstRaw || contractVals?.blockGasLimit;
+            cancelGasEst, gasPriceNWCWEI,
+            networkCurrency, priceUSDPerCurrency) => {
+        const gasLimit = cancelGasEst?.gasEstRaw || contractVals?.blockGasLimit || 2e7;
         const hasSellOrder = contractVals && !contractVals.mySellOrder.amountDUBLRWEI.isZero();
         const disabled = !dublr
                 // Make sure there's an active sell order
@@ -1430,13 +1497,8 @@ const dataflowNodes = {
         return disabled ? undefined : {
             // Group all dependencies together in a single object, so that they can be accessed
             // atomically by the button's onclick handler
-            dublr: dublr,
-            mySellOrder: contractVals.mySellOrder,
-            // For some reason, setting gasLimit to the result of estimateGas can cause an out of gas error,
-            // so just let Ethers estimate gas instead
-            // gasLimit: gasLimit,
-            networkCurrency: networkCurrency,
-            priceUSDPerCurrency: priceUSDPerCurrency,
+            dublr, mySellOrder: hasSellOrder ? contractVals.mySellOrder : undefined,
+            gasPriceNWCWEI, networkCurrency, priceUSDPerCurrency
         };
     },
 
@@ -1516,14 +1578,16 @@ export function dataflowSetup() {
                         () => buyParams.dublr.buy(
                                 buyParams.minimumTokensToBuyOrMintDUBLRWEI,
                                 buyParams.allowBuying, buyParams.allowMinting,
-                                { value: buyParams.buyAmountNWCWEI, /* gasLimit: buyParams.gasLimit */ }),
+                                { value: buyParams.buyAmountNWCWEI,
+                                    gasPrice: buyParams.gasPriceNWCWEI }),
                         () => dataflow.set({
                             buyStatus_out: "Transaction submitted; waiting for confirmation",
                             buyStatusIsWarning_out: false
                         }),
-                        "buy tokens", "try buying a smaller amount", ", try buying a smaller amount");
+                        "buy tokens", "try buying a smaller amount", ", try buying a smaller amount",
+                        buyParams.networkCurrency);
                 const status = (result.warningText ? "Transaction result: " + result.warningText
-                        : "Transaction succeeded (see log below)");
+                        : "Transaction succeeded (see log below).<br/>UI should update in a few seconds.");
                 dataflow.set({
                     buyStatus_out: status,
                     buyStatusIsWarning_out: !!result.warningText,
@@ -1555,14 +1619,15 @@ export function dataflowSetup() {
                         () => sellParams.dublr.sell(
                                 sellParams.listPriceNWCPerDUBLR_x1e9,
                                 sellParams.sellAmountDUBLRWEI,
-                                { /* gasLimit: sellParams.gasLimit */ }),
+                                { gasPrice: sellParams.gasPriceNWCWEI }),
                         () => dataflow.set({
                             sellStatus_out: "Transaction submitted; waiting for confirmation",
                             sellStatusIsWarning_out: false
                         }),
-                        "list tokens for sale", ", need to pay for gas", "");
+                        "list tokens for sale", ", need to pay for gas", "",
+                        sellParams.networkCurrency);
                 const status = (result.warningText ? "Transaction result: " + result.warningText
-                        : "Transaction succeeded (see log below)");
+                        : "Transaction succeeded (see log below).<br/>UI should update in a few seconds.");
                 dataflow.set({
                     sellStatus_out: status,
                     sellStatusIsWarning_out: !!result.warningText,
@@ -1591,14 +1656,15 @@ export function dataflowSetup() {
                     txLogs_out: "",
                 });
                 const result = await runTransaction(dublr,
-                        () => cancelParams.dublr.cancelMySellOrder({ /* gasLimit: cancelParams.gasLimit */ }),
+                        () => cancelParams.dublr.cancelMySellOrder({ gasPrice: cancelParams.gasPriceNWCWEI }),
                         () => dataflow.set({
                             cancelStatus_out: "Transaction submitted; waiting for confirmation",
                             cancelStatusIsWarning_out: false
                         }),
-                        "cancel sell order", ", need to pay for gas", "");
+                        "cancel sell order", ", need to pay for gas", "",
+                        cancelParams.networkCurrency);
                 const status = (result.warningText ? "Transaction result: " + result.warningText
-                        : "Transaction succeeded (see log below)");
+                        : "Transaction succeeded (see log below).<br/>UI should update in a few seconds.");
                 dataflow.set({
                     cancelStatus_out: status,
                     cancelStatusIsWarning_out: !!result.warningText,
