@@ -117,7 +117,8 @@ async function onConnect(info) {
 }
 
 async function onDisconnect(error) {
-    console.log("Wallet disconnected with error:", error);
+    // This method is called if chain is changed
+    // console.log("Wallet disconnected with error:", error);
     walletAddr = undefined;
     chainIdInt = undefined;
     dataflow.set({ chainId: undefined, wallet: undefined });
@@ -156,82 +157,131 @@ async function onConnectToProvider(provider) {
     
     web3ModalProvider = provider;
     window.web3ModalProvider = provider;
-    walletAddr = await getWallet();
+    try {
+        walletAddr = await getWallet();
+    } catch (e) {
+        walletAddr = undefined;
+    }
     chainIdInt = new Number(web3ModalProvider.chainId.toString());
+
+    const nameOfWallet = walletName();
+    const dublrContractAddr = dublrAddr[chainIdInt];
 
     web3ModalProvider.on("accountsChanged", onAccountsChanged);
     web3ModalProvider.on("chainChanged", onChainChanged);
     web3ModalProvider.on("connect", onConnect);
     web3ModalProvider.on("disconnect", onDisconnect);
-
-    // Mark button for disconnect
-    makeDisconnectButton();        
     
-    // Check if token has already been added to wallet
-    const nameOfWallet = walletName();
-    const dublrContractAddr = dublrAddr[chainIdInt];
-    const walletKey = nameOfWallet + ":" + walletAddr + ":" + dublrContractAddr;
-    console.log("Wallet: " + walletKey);
-    let val = await idbGet(walletKey,
-            // Default to false rather than undefined on failure (don't keep bugging user)
-            false);
-    if (nameOfWallet !== "Coinbase Wallet"  // Coinbase refuses to add the token, they claim their autodetect works
-            && val === undefined && dublrContractAddr !== undefined
-            && web3ModalProvider.request !== undefined) {
-        // Only ever ask the user once
-        await idbSet(walletKey, false);
-        // Ask the user if they want to add the DUBLR token to their wallet
-        // (probably not supported by all wallets). Run asynchronously because
-        // the wallet can be connected even without this step being completed.
-        new Promise(async () => {
-            try {
-                if (await window.web3ModalProvider?.request?.({
-                        method: "wallet_watchAsset",
-                        params: {
-                            type: "ERC20",
-                            options: {
-                                image: "https://raw.githubusercontent.com/dublr/dublr/main/icon.svg",
-                                address: dublrContractAddr,
-                                // TODO: append network name to end of token name? "DUBLR (Polygon)"
-                                symbol: "DUBLR",
+    // If wallet is connected to anything other than Polygon mainnet
+    if (chainIdInt != 137) {
+        // Switch wallet to Polygon mainnet before notifying dataflow network of connection
+        try {
+            // check if the chain to connect to is installed
+            await web3ModalProvider.request({
+                method: "wallet_switchEthereumChain",
+                params: [{ chainId: "0x89" /* == 137 */ }],
+            });
+        } catch (error) {
+            // Chain was not added to MetaMask
+            if (error.code === 4902) {
+                // chainId 137 is not known by wallet, need to manually add it
+                try {
+                    await window.ethereum.request({
+                        method: 'wallet_addEthereumChain',
+                        params: [{
+                            chainId: "0x89",
+                            chainName: "Polygon Mainnet",
+                            nativeCurrency: {
+                                name: "Polygon MATIC",
+                                symbol: "MATIC",
                                 decimals: 18
-                            }
-                        }})) {
-                    // DUBLR token was successfully added to wallet
-                    console.log("DUBLR token added to wallet");
-                    await idbSet(walletKey, true);
-                } else {
-                    console.log("DUBLR token could not be added to wallet: user rejected request");
+                            },
+                            rpcUrls: ["https://polygon-rpc.com/"],
+                            blockExplorerUrls: ["https://polygonscan.com"]
+                        }]});
+                } catch (addError) {
+                    console.error(addError);
                 }
-            } catch (e) {
-                console.log("DUBLR token could not be added to wallet: " + e?.message);
             }
-        });
+            console.error(error);
+        }
     }
 
+    // Notify dataflow network of connection
     let chainId;
     try {
         if (web3ModalProvider?.getNetwork) {
             chainId = (await web3ModalProvider.getNetwork())?.chainId;
             chainIdInt = new Number(chainId.toString());
         }
-    } catch (e) {}
-    let wallet;
-    try {
-        wallet = await getWallet();
-    } catch (e) {}
+    } catch (e) {
+        // chainId has invalid format
+        chainId = undefined;
+    }
     await dataflow.set({
         web3ModalProvider,
         chainId,
-        wallet 
+        wallet: walletAddr
     });
     
-    // Wallet has been completely successfully connected
-    await idbSet("walletConnected", true);
-    dataflow.set({
-        walletConnectionInfo_out: "",
-        walletConnectionInfoIsWarning_out: false
-    });
+    if (dublrContractAddr === undefined || walletAddr === undefined) {
+        // Didn't connect to wallet for some reason
+        dataflow.set({
+            walletConnectionInfo_out: "Could not connect wallet to Dublr DEX.",
+            walletConnectionInfoIsWarning_out: true
+        });
+        makeConnectButton();
+        
+    } else {
+        // Wallet has been completely successfully connected
+        await idbSet("walletConnected", true);
+        dataflow.set({
+            walletConnectionInfo_out: "",
+            walletConnectionInfoIsWarning_out: false
+        });
+
+        // Mark button for disconnect
+        makeDisconnectButton();        
+        
+        // Check if token has already been added to wallet
+        const walletKey = nameOfWallet + ":" + walletAddr + ":" + dublrContractAddr;
+        let val = await idbGet(walletKey,
+                // Default to false rather than undefined on failure (don't keep bugging user)
+                false);
+        if (nameOfWallet !== "Coinbase Wallet"  // Coinbase refuses to add the token, they claim their autodetect works
+                && val === undefined && dublrContractAddr !== undefined
+                && web3ModalProvider.request !== undefined) {
+            // Only ever ask the user once
+            await idbSet(walletKey, false);
+            console.log("Adding token to wallet: " + walletKey);
+            // Ask the user if they want to add the DUBLR token to their wallet
+            // (probably not supported by all wallets). Run asynchronously because
+            // the wallet can be connected even without this step being completed.
+            new Promise(async () => {
+                try {
+                    if (await window.web3ModalProvider?.request?.({
+                            method: "wallet_watchAsset",
+                            params: {
+                                type: "ERC20",
+                                options: {
+                                    image: "https://raw.githubusercontent.com/dublr/dublr/main/icon.svg",
+                                    address: dublrContractAddr,
+                                    symbol: "DUBLR",
+                                    decimals: 18
+                                }
+                            }})) {
+                        // DUBLR token was successfully added to wallet
+                        console.log("DUBLR token added to wallet");
+                        await idbSet(walletKey, true);
+                    } else {
+                        console.log("DUBLR token could not be added to wallet: user rejected request");
+                    }
+                } catch (e) {
+                    console.log("DUBLR token could not be added to wallet: " + e?.message);
+                }
+            });
+        }
+    }
 }
 
 const walletButton = document.getElementById("connect-wallet-button");

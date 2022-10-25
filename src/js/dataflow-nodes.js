@@ -565,8 +565,9 @@ const dataflowNodes = {
             dublrContractAddr = dublrAddr[new Number(chainId.toString())];
             if (!dublrContractAddr) {
                 dataflow.set({
-                    networkInfo_out: "Wallet is connected to network: " + networkName
-                            + "<br/>However, the Dublr DEX is not deployed on this network.",
+                    networkInfo_out: "Wallet is connected to network: <span class='num'>" + networkName + "</span>."
+                            + "<br/>However, the Dublr DEX is not deployed on this network."
+                            + "<br/>Please connect your wallet to <span class='num'>Polygon Mainnet</span>.",
                     networkInfoIsWarning_out: true,
                     scanURL_out: "https://github.com/dublr/dublr"
                 });
@@ -586,7 +587,7 @@ const dataflowNodes = {
         if (!code || code.length <= 2) {
             // If code is "0x" then there is no contract currently deployed at address
             dataflow.set({
-                networkInfo_out: "Wallet is connected to network: " + networkName
+                networkInfo_out: "Wallet is connected to network: <span class='num'>" + networkName + "</span>"
                         + "<br/>However, the Dublr DEX is not deployed on this network.",
                 networkInfoIsWarning_out: true,
                 scanURL_out: "https://github.com/dublr/dublr"
@@ -1159,7 +1160,7 @@ const dataflowNodes = {
         const keys = [];
         const vals = [];
         if (contractVals?.balanceNWCWEI) {
-            keys.push("Network currency:");
+            keys.push("");
             vals.push(weiToDisplay(contractVals.balanceNWCWEI, networkCurrency, priceUSDPerCurrency));
         }
         if (contractVals?.balanceDUBLRWEI) {
