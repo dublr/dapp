@@ -201,6 +201,7 @@ async function onConnectToProvider(provider) {
                                 symbol: "MATIC",
                                 decimals: 18
                             },
+                            // Or use for rpcUrls: https://polygon-mainnet.infura.io/v3
                             rpcUrls: ["https://polygon-rpc.com/"],
                             blockExplorerUrls: ["https://polygonscan.com"]
                         }]});

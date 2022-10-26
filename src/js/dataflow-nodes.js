@@ -1203,6 +1203,15 @@ const dataflowNodes = {
 
     // UI update functions ----------------------------------------------------
 
+    updateNeedToConnect: (dublr, wallet) => {
+        dataflow.set({
+            needToConnect_out: dublr && wallet
+                ? ""
+                : "Please connect a MATIC wallet on the Polygon network using the button above "
+                    + "in order to use this exchange"
+        });
+    },
+
     updateDisabledFunctionalityWarnings: (contractVals, buyStatus_out, sellStatus_out) => {
         if (contractVals !== undefined) {
             // Give warnings if buying, selling, or minting is disabled on the DEX
