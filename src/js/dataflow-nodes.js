@@ -530,7 +530,7 @@ let currAllowMinting = true;
 let currProvider;
 
 const dataflowNodes = {
-    provider: async (web3ModalProvider, chainId, initTrigger) => {
+    provider: async (web3ModalProvider, network, chainId, initTrigger) => {
         // Remove listeners from current provider, if any
         if (currProvider) {
             const dublrContractAddr = getDublrAddr(currProvider.chainId);
@@ -567,7 +567,10 @@ const dataflowNodes = {
         // Add new provider
         if (providerToUse) {
             let providerChainId = providerToUse.chainId;
-            if (!providerChainId) {
+            if (!providerChainId && network) {
+                providerChainId = network.chainId;
+            }            
+            if (!providerChainId && chainId) {
                 providerChainId = chainId;
             }
             if (!providerChainId) {
@@ -593,7 +596,12 @@ const dataflowNodes = {
             }
             
             // Some providers don't set the accounts, need to actively query this here
-            const accounts = await rpcCall(() => currProvider?.listAccounts?.());
+            let accounts;
+            try {
+                accounts = await rpcCall(() => currProvider?.listAccounts?.());
+            } catch (e) {
+                // Fails for AlchemyProvider, i.e. if no Web3Provider is available
+            }
             const wallet = accounts && accounts.length > 0 ? accounts[0] : undefined;
             dataflow.set({ wallet, chainId: providerChainId });
         }
