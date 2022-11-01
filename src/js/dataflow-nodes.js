@@ -8,6 +8,8 @@ import { drawDepthChart } from "./orderbook-charting.js";
 
 window.ethers = ethers;
 
+const ALCHEMY_API_KEY = "v0X3ns9FxubGo7JZ6N54lMsUP841XfiT";
+
 // Note that in this code and the contract Solidity code, NWC is used to denote the symbol of the network currency
 // (ETH for Ethereum, MATIC for Polygon, etc.)
 
@@ -552,9 +554,11 @@ const dataflowNodes = {
             // Use the default Ethers provider so that the orderbook and depth chart can be displayed
             // even though buying and selling will fail because there is no connected wallet.
             try {
-                providerToUse = ethers.getDefaultProvider("matic", {
-                    alchemy: "v0X3ns9FxubGo7JZ6N54lMsUP841XfiT"
-                });
+                providerToUse = new ethers.providers.AlthemyProvider("matic", ALCHEMY_API_KEY);
+                // The default provider is slow because it's always at its RPC rate limit
+                // providerToUse = ethers.getDefaultProvider("matic", {
+                //     alchemy: ALCHEMY_API_KEY
+                // });
             } catch (e) {
                 console.log("Cannot connect to default provider for displaying orderbook -- please connect to a wallet");
             }
