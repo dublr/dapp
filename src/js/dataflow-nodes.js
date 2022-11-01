@@ -380,6 +380,7 @@ async function rpcCall(promiseFn) {
         }
     }
     console.log("RPC call failed:", err);
+    console.trace();
     return undefined;
 }
 
@@ -527,7 +528,7 @@ let currAllowMinting = true;
 let currProvider;
 
 const dataflowNodes = {
-    provider: async (web3ModalProvider, initTrigger) => {
+    provider: async (web3ModalProvider, chainId, initTrigger) => {
         // Remove listeners from current provider, if any
         if (currProvider) {
             const dublrContractAddr = getDublrAddr(currProvider.chainId);
@@ -547,6 +548,9 @@ const dataflowNodes = {
         if (web3ModalProvider) {
             providerToUse = web3ModalProvider;
         } else {
+            // If there is no Web3Modal provider, then the user has not yet connected their wallet.
+            // Use the default Ethers provider so that the orderbook and depth chart can be displayed
+            // even though buying and selling will fail because there is no connected wallet.
             try {
                 providerToUse = ethers.getDefaultProvider("matic", {
                     alchemy: "v0X3ns9FxubGo7JZ6N54lMsUP841XfiT"
@@ -558,19 +562,26 @@ const dataflowNodes = {
         
         // Add new provider
         if (providerToUse) {
-            const providerChainId = providerToUse.chainId;
+            let providerChainId = providerToUse.chainId;
+            if (!providerChainId) {
+                providerChainId = chainId;
+            }
+            if (!providerChainId) {
+                // Use the Polygon network if the provider doesn't specify the chain id for some reason
+                providerChainId = 137;
+            }
             const dublrContractAddr = getDublrAddr(providerChainId);
             // "any" parameter: https://github.com/ethers-io/ethers.js/discussions/1480
             // (Although this is not really needed because the app is refreshed if chainId changes)
             try {
                 currProvider = new ethers.providers.Web3Provider(providerToUse, "any");
             } catch (e) {
-                // Succeeds when providerToUse is a wallet, fails when providerToUse is the Ethers
-                // default provider
+                // Fails when providerToUse is the Ethers default provider (not connected to a wallet)
                 currProvider = providerToUse;
             }
             if (currProvider) {
                 if (dublrContractAddr) {
+                    // Listen for Dublr contract events
                     currProvider.on({ address: dublrContractAddr }, onDublrEvent);
                 }
                 currProvider.on("network", onNetwork);
@@ -623,14 +634,11 @@ const dataflowNodes = {
         }
     },
 
-    dublr: async (provider, chainId, network, networkName, scanAddress) => {
+    dublr: async (provider, network, networkName, scanAddress) => {
         var dublrContractAddr;
-        let currChainId = chainId;
+        let currChainId = network?.chainId;
         if (!currChainId && provider) {
             currChainId = provider?.chainId;
-        }
-        if (!currChainId && network) {
-            currChainId = network.chainId;
         }
         if (provider && currChainId && networkName) {
             dublrContractAddr = getDublrAddr(currChainId);
@@ -653,6 +661,12 @@ const dataflowNodes = {
             return undefined;
         }
         let signer = provider?.getSigner?.();
+        if (!signer) {
+            // For the default provider (which is a placeholder when no wallet is connected),
+            // there is no signer in the provider. Create a random empty wallet so that at least
+            // static calls will succeed (for fetching the orderbook).
+            signer = await ethers.Wallet.createRandom().connect(provider);
+        }
         const contract = new ethers.Contract(dublrContractAddr, dublrABI, signer);
         // Check DUBLR contract is deployed on this network
         const code = await rpcCall(() => provider.getCode(dublrContractAddr));
@@ -667,7 +681,7 @@ const dataflowNodes = {
             return undefined;
         } else {
             dataflow.set({
-                networkInfo_out: "Connected to network: <span class='num'>" + networkName + "</span>",
+                networkInfo_out: "Dublr is deployed to network: <span class='num'>" + networkName + "</span>",
                 networkInfoIsWarning_out: false,
                 scanURL_out:
                         scanAddress === "https://github.com/dublr/dublr" ? scanAddress
@@ -996,9 +1010,9 @@ const dataflowNodes = {
 
     // Gas estimation and simulation of buy -----------------------------------
 
-    buyGasEst: async (dublr, contractVals,
+    buyGasEst: async (dublr, wallet, contractVals,
             gasPriceNWCWEI, buyAmountNWCWEI, allowBuying, allowMinting) => {
-        if (!dublr || !buyAmountNWCWEI || allowBuying === undefined
+        if (!dublr || !wallet || !buyAmountNWCWEI || allowBuying === undefined
                 || allowMinting === undefined || !contractVals?.blockGasLimit
                 || !gasPriceNWCWEI || !contractVals?.balanceNWCWEI) {
             dataflow.set({ buyGasEstWarning_out: "" });
@@ -1021,9 +1035,9 @@ const dataflowNodes = {
         return estimateGasResult;
     },
 
-    sellGasEst: async (dublr, contractVals,
+    sellGasEst: async (dublr, wallet, contractVals,
             gasPriceNWCWEI, listPriceNWCPerDUBLR_x1e9, sellAmountDUBLRWEI) => {
-        if (!dublr || !gasPriceNWCWEI || !listPriceNWCPerDUBLR_x1e9
+        if (!dublr || !wallet || !gasPriceNWCWEI || !listPriceNWCPerDUBLR_x1e9
                 || !contractVals?.blockGasLimit || !sellAmountDUBLRWEI || !contractVals?.balanceNWCWEI) {
             dataflow.set({ sellGasEstWarning_out: "" });
             return undefined;
@@ -1040,9 +1054,9 @@ const dataflowNodes = {
         return estimateGasResult;
     },
 
-    cancelGasEst: async (dublr, contractVals, gasPriceNWCWEI) => {
+    cancelGasEst: async (dublr, wallet, contractVals, gasPriceNWCWEI) => {
         const hasSellOrder = contractVals && !contractVals.mySellOrder.amountDUBLRWEI.isZero();
-        if (!dublr || !gasPriceNWCWEI || !hasSellOrder) {
+        if (!dublr || !wallet || !gasPriceNWCWEI || !hasSellOrder) {
             dataflow.set({ cancelGasEstWarning_out: "" });
             return undefined;
         }
@@ -1058,11 +1072,11 @@ const dataflowNodes = {
 
     // Calculate amount of DUBLR estimated to be bought, and also build the execution plan,
     // by simulating the Dublr DEX's buy() function
-    amountBoughtEstDUBLRWEI: async (contractVals,
+    amountBoughtEstDUBLRWEI: async (dublr, wallet, contractVals,
             buyAmountNWCWEI, allowBuying, allowMinting,
             orderbook, maxSlippageFrac_x1e9,
             buyGasEst, networkCurrency, priceUSDPerCurrency) => {
-        if (contractVals === undefined
+        if (!dublr || !wallet || !contractVals
                 || buyAmountNWCWEI === undefined
                 || allowBuying === undefined || allowMinting === undefined
                 || (!allowBuying && !allowMinting)
