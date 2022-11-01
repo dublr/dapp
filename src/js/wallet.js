@@ -284,6 +284,7 @@ const walletButton = document.getElementById("connect-wallet-button");
 const walletButtonText = document.getElementById("connect-wallet-text");
 
 async function onConnectClick() {
+    makePleaseWaitButton("Connecting...");
     try {
         // Pop up the Web3Modal modal dialog
         // When a wallet is successfully connected, triggers onConnectToProvider(provider),
@@ -312,6 +313,7 @@ async function onConnectClick() {
 }
 
 async function onDisconnectClick() {
+    makePleaseWaitButton("Disconnecting...");
     await disconnectFromProvider();
     web3Modal.clearCachedProvider();
     await idbSet("walletConnected", false);
@@ -321,6 +323,11 @@ async function onDisconnectClick() {
 function makeConnectButton() {
     walletButtonText.innerText = "Connect to Wallet";
     walletButton.onclick = onConnectClick;
+}
+
+function makePleaseWaitButton(msg) {
+    walletButtonText.innerText = msg;
+    walletButton.onclick = "";
 }
 
 function makeDisconnectButton() {

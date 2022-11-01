@@ -238,12 +238,20 @@ export const dataflow = {
                         if (someArgChanged) {
                             // Only call fn if at least one param value changed, to avoid repeating work
                             // (i.e. implement memoization)
-                            const promise = fn(...args);
+                            const fnStartTime = Date.now();
                             if (window.DEBUG_DATAFLOW) {
-                                console.log("Calling:", {[name]: paramNamesAndArgs}, promise);
+                                console.log("Calling:", {[name]: paramNamesAndArgs});
+                            }
+                            // Call function with args
+                            const fnResult = fn(...args);
+                            if (window.DEBUG_DATAFLOW) {
+                                if (typeof fnResult === 'object' && typeof fnResult.then === 'function') {
+                                    // fnResult is a promise -- record time taken to execute function
+                                    fnResult.then(fn.timeTaken = Date.now() - fnStartTime);
+                                }
                             }
                             // Call fn with these params, returning the resulting promise
-                            promises.push(promise);
+                            promises.push(fnResult);
                         } else {
                             // Otherwise reuse cached val (we still need to propagate unchanged
                             // value down dataflow graph, so that fn.numDirtyDeps gets correctly
@@ -257,6 +265,7 @@ export const dataflow = {
                     
                     // Wait for all promises to be resolved, yielding maximal concurrency
                     const promiseResults = await Promise.allSettled(promises);
+                    const timeTakenByPromise = window.DEBUG_DATAFLOW ? {} : undefined;
                     for (var i = 0; i < fnNames.length; i++) {
                         const promiseResult = promiseResults[i];
                         if (promiseResult.status === "fulfilled") {
@@ -271,10 +280,16 @@ export const dataflow = {
                         } else {
                             console.log("Unknown promise result", promiseResult);
                         }
+                        if (window.DEBUG_DATAFLOW) {
+                            timeTakenByPromise[fnNames[i]] = dataflow.nameToFn.get(fnNames[i])?.timeTaken;
+                        }
                     }
                 }
-                if (window.DEBUG_DATAFLOW && !dataflow.updateBatches.isEmpty()) {
-                    console.log("Starting next dynamic dataflow batch");
+                if (window.DEBUG_DATAFLOW) {
+                    console.log("Time taken:", timeTakenByPromise);
+                    if (!dataflow.updateBatches.isEmpty()) {
+                        console.log("Starting next dynamic dataflow batch");
+                    }
                 }
             }
             dataflow.inProgress = false;

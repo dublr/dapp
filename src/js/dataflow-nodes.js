@@ -4,7 +4,7 @@ import { dataflow } from "./dataflow-lib.js";
 import { dublrAddr, dublrABI } from "./contract.js";
 import { drawDepthChart } from "./orderbook-charting.js";
 
-// DEBUG_DATAFLOW = true;
+DEBUG_DATAFLOW = true;
 
 window.ethers = ethers;
 
@@ -665,7 +665,10 @@ const dataflowNodes = {
             });
             return undefined;
         }
-        let signer = provider?.getSigner?.();
+        let signer;
+        try {
+            signer = provider?.getSigner?.();
+        } catch (e) {}
         if (!signer) {
             // For the default provider (which is a placeholder when no wallet is connected),
             // there is no signer in the provider. Create a random empty wallet so that at least
