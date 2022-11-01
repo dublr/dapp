@@ -28,16 +28,23 @@ function onDublrEvent(log, event) {
     // Ignore log entries without block numbers (this includes RPC errors, such as reverted
     // transactions)
     if (log?.blockNumber) {
-        // Schedule dublrStateTrigger to be triggered at the next block (on Polygon, changes can
-        // only be read from the contract after the block in the log has been committed, i.e.
-        // after the next block has been mined).
-        // Unfortunately on Polygon, blocks (with 2-3 second intervals) are aggregated into
-        // ~15-second chunks, probably by Ethers polling the blockchain every 15 seconds or
-        // something. Therefore, it takes up to 15 seconds for the UI to update after the contract
-        // has changed.
         // Only trigger dublrStateTrigger once, even if there are multiple logs for a block
         if (!highestBlockNumber || log.blockNumber > highestBlockNumber) {
             highestBlockNumber = log.blockNumber;
+
+            // Try triggering immediate update (works on Ethereum, doesn't seem to work on Polygon
+            // because logs are generated before changes are committed to the contract).
+            // We alternate back and forth between dublrStateTrigger being set to 0, and being set
+            // to the next block number.
+            dataflow.set({ dublrStateTrigger: 0 });
+
+            // Schedule dublrStateTrigger to be triggered at the next block (on Polygon, changes can
+            // only be read from the contract after the block in the log has been committed, i.e.
+            // after the next block has been mined).
+            // Unfortunately on Polygon, blocks (with 2-3 second intervals) are aggregated into
+            // ~15-second chunks, probably by Ethers polling the blockchain every 15 seconds or
+            // something. Therefore, it takes up to 15 seconds for the UI to update after the contract
+            // has changed.
             new Promise(async () => {
                 // Mine the next block asynchronously
                 try {
@@ -563,7 +570,8 @@ const dataflowNodes = {
                 currProvider = new ethers.providers.AlchemyProvider("matic", ALCHEMY_API_KEY);
                 // The default provider is slow because it's always at its RPC rate limit
                 // currProvider = ethers.getDefaultProvider("matic", {
-                //     alchemy: ALCHEMY_API_KEY
+                //     alchemy: ALCHEMY_API_KEY,
+                //     infura: "-"                    // Disable Infura, they don't have a free tier for Polygon
                 // });
             } catch (e) {
                 console.log("Cannot connect to default provider for displaying orderbook -- please connect to a wallet.", e);
@@ -1664,7 +1672,7 @@ export function dataflowSetup() {
                         "buy tokens", "try buying a smaller amount", ", try buying a smaller amount",
                         buyParams.networkCurrency);
                 const status = (result.warningText ? "Transaction result: " + result.warningText
-                        : "Transaction succeeded (see log below).<br/>UI should update in a few seconds.");
+                        : "Transaction succeeded (see log below).<br/>Balances should update in a few seconds.");
                 dataflow.set({
                     buyStatus_out: status,
                     buyStatusIsWarning_out: !!result.warningText,
@@ -1704,7 +1712,7 @@ export function dataflowSetup() {
                         "list tokens for sale", ", need to pay for gas", "",
                         sellParams.networkCurrency);
                 const status = (result.warningText ? "Transaction result: " + result.warningText
-                        : "Transaction succeeded (see log below).<br/>UI should update in a few seconds.");
+                        : "Transaction succeeded (see log below).<br/>Balances should update in a few seconds.");
                 dataflow.set({
                     sellStatus_out: status,
                     sellStatusIsWarning_out: !!result.warningText,
