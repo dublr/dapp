@@ -238,16 +238,20 @@ export const dataflow = {
                         if (someArgChanged) {
                             // Only call fn if at least one param value changed, to avoid repeating work
                             // (i.e. implement memoization)
-                            const fnStartTime = Date.now();
+                            let fnStartTime;
                             if (window.DEBUG_DATAFLOW) {
+                                fn.timeTaken = 0;
+                                fnStartTime = Date.now();
                                 console.log("Calling:", {[name]: paramNamesAndArgs});
                             }
                             // Call function with args
                             const fnResult = fn(...args);
                             if (window.DEBUG_DATAFLOW) {
-                                if (typeof fnResult === 'object' && typeof fnResult.then === 'function') {
+                                if (typeof fnResult === "object" && typeof fnResult.then === "function") {
                                     // fnResult is a promise -- record time taken to execute function
-                                    fnResult.then(fn.timeTaken = Date.now() - fnStartTime);
+                                    fnResult.then(() => {
+                                        fn.timeTaken = Date.now() - fnStartTime;
+                                    });
                                 }
                             }
                             // Call fn with these params, returning the resulting promise
@@ -281,15 +285,19 @@ export const dataflow = {
                             console.log("Unknown promise result", promiseResult);
                         }
                         if (window.DEBUG_DATAFLOW) {
-                            timeTakenByPromise[fnNames[i]] = dataflow.nameToFn.get(fnNames[i])?.timeTaken;
+                            const fn = dataflow.nameToFn.get(fnNames[i]);
+                            if (fn?.timeTaken) {
+                                timeTakenByPromise[fnNames[i]] = fn.timeTaken;
+                                fn.timeTaken = undefined;
+                            }
                         }
                     }
-                }
-                if (window.DEBUG_DATAFLOW) {
-                    console.log("Time taken:", timeTakenByPromise);
-                    if (!dataflow.updateBatches.isEmpty()) {
-                        console.log("Starting next dynamic dataflow batch");
+                    if (window.DEBUG_DATAFLOW && Object.keys(timeTakenByPromise).length > 0) {
+                        console.log("Time taken:", timeTakenByPromise);
                     }
+                }
+                if (window.DEBUG_DATAFLOW && !dataflow.updateBatches.isEmpty()) {
+                    console.log("Starting next dynamic dataflow batch");
                 }
             }
             dataflow.inProgress = false;

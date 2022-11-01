@@ -4,7 +4,7 @@ import { dataflow } from "./dataflow-lib.js";
 import { dublrAddr, dublrABI } from "./contract.js";
 import { drawDepthChart } from "./orderbook-charting.js";
 
-DEBUG_DATAFLOW = true;
+// DEBUG_DATAFLOW = true;
 
 window.ethers = ethers;
 
@@ -530,7 +530,9 @@ let currAllowMinting = true;
 let currProvider;
 
 const dataflowNodes = {
-    provider: async (web3ModalProvider, chainId, initTrigger) => {
+    provider: async (web3ModalProvider, chainId,
+            // Need a new provider every time the wallet changes, because the provider has a fixed signer
+            wallet, initTrigger) => {
         // Remove listeners from current provider, if any
         if (currProvider) {
             const dublrContractAddr = getDublrAddr(currProvider.chainId);
@@ -670,6 +672,9 @@ const dataflowNodes = {
             signer = provider?.getSigner?.();
         } catch (e) {}
         if (!signer) {
+            signer = provider?.signer;
+        }
+        if (!signer) {
             // For the default provider (which is a placeholder when no wallet is connected),
             // there is no signer in the provider. Create a random empty wallet so that at least
             // static calls will succeed (for fetching the orderbook).
@@ -699,16 +704,19 @@ const dataflowNodes = {
         }
     },
 
-    contractVals: async (dublr, dublrStateTrigger, priceTimerTrigger) => {
-        if (!dublr) {
-            return undefined;
-        }
-        let values = await rpcCall(() => dublr.callStatic.getStaticCallValues());
-        if (values === undefined) {
-            // Reuse last cached values, if RPC call failed
-            return dataflow.value.contractVals;
-        }
-        return values;
+    contractVals_fetcher: async (dublr, dublrStateTrigger, priceTimerTrigger) => {
+        // Fetch contract vals in a new Promise, so that dataflow is not blocked
+        new Promise(async () => {
+            let vals;
+            if (dublr) {
+                vals = await rpcCall(() => dublr.callStatic.getStaticCallValues());
+            }
+            // Keep last cached values if RPC call failed
+            if (vals) {
+                // Update contractVals if RPC call succeeded
+                dataflow.set({ contractVals: vals });
+            }
+        });
     },
 
     // Available balance for selling (wallet balance plus value of current active sell order, if any)
@@ -810,36 +818,41 @@ const dataflowNodes = {
         return orderbookEntriesOut;
     },
 
-    gasPriceNWCWEI: async (provider, chainId, priceTimerTrigger, dublrStateTrigger) => {
-        let gasPrice;
-        if (chainId === 137 || chainId === 80001) {
-            // Polygon needs a gas station, because it does not yet properly implement EIP-1559
-            try {
-                const res = await (await fetch('https://gasstation-mainnet.matic.network/v2')).json();
-                // Increase the max fee by 20%, because gas station is sometimes wrong
-                const maxFee = Math.round(1.2 * res?.standard?.maxFee * 1e9);
-                if (maxFee) {
-                    gasPrice = ethers.BigNumber.from(maxFee);
-                }
-                // Set gasPrice to max of maxFee and 1.5 times the base fee, because the base fee
-                // can fluctuate, and there is an RPC error if the specified gas price is lower
-                // than the base fee.
-                const baseFee = Math.round(1.5 * res?.estimatedBaseFee * 1e9);
-                if (baseFee && (!gasPrice || baseFee.gt(maxFee))) {
-                    gasPrice = baseFee;
-                }
-            } catch (e) {}
-        }
-        if (!gasPrice && provider) {
-            // If not connected to Polygon network, or Polygon gas station fails, then use Provider to
-            // estimate gas price. Options: gasPrice, maxFeePerGas, maxPriorityFeePerGas.
-            gasPrice = await rpcCall(async () => (await provider.getFeeData())?.maxFeePerGas);
-            if (gasPrice && (chainId === 137 || chainId === 80001)) {
-                // On Polygon, double the gas price, since in times of congestion, the estimates are wrong
-                gasPrice = gasPrice.mul(2);
+    gasPriceNWCWEI_fetcher: async (provider, chainId, priceTimerTrigger, dublrStateTrigger) => {
+        // This can take up to a second to fetch the gas price.
+        // Run in a new Promise so that it doesn't block the dataflow graph, and push the result
+        // into gasPriceNWCWEI once it is available.
+        new Promise(async () => {
+            let gasPrice;
+            if (chainId === 137 || chainId === 80001) {
+                // Polygon needs a gas station, because it does not yet properly implement EIP-1559
+                try {
+                    const res = await (await fetch('https://gasstation-mainnet.matic.network/v2')).json();
+                    // Increase the max fee by 20%, because gas station is sometimes wrong
+                    const maxFee = Math.round(1.2 * res?.standard?.maxFee * 1e9);
+                    if (maxFee) {
+                        gasPrice = ethers.BigNumber.from(maxFee);
+                    }
+                    // Set gasPrice to max of maxFee and 1.5 times the base fee, because the base fee
+                    // can fluctuate, and there is an RPC error if the specified gas price is lower
+                    // than the base fee.
+                    const baseFee = Math.round(1.5 * res?.estimatedBaseFee * 1e9);
+                    if (baseFee && (!gasPrice || baseFee.gt(maxFee))) {
+                        gasPrice = baseFee;
+                    }
+                } catch (e) {}
             }
-        }
-        return gasPrice;
+            if (!gasPrice && provider) {
+                // If not connected to Polygon network, or Polygon gas station fails, then use Provider to
+                // estimate gas price. Options: gasPrice, maxFeePerGas, maxPriorityFeePerGas.
+                gasPrice = await rpcCall(async () => (await provider.getFeeData())?.maxFeePerGas);
+                if (gasPrice && (chainId === 137 || chainId === 80001)) {
+                    // On Polygon, double the gas price, since in times of congestion, the estimates are wrong
+                    gasPrice = gasPrice.mul(2);
+                }
+            }
+            dataflow.set({ gasPriceNWCWEI: gasPrice });
+        });
     },
 
     // Validation functions for dataflow input from DOM -----------------------------
