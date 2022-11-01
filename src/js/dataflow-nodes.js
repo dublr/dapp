@@ -563,15 +563,21 @@ const dataflowNodes = {
             const dublrContractAddr = getDublrAddr(providerChainId);
             // "any" parameter: https://github.com/ethers-io/ethers.js/discussions/1480
             // (Although this is not really needed because the app is refreshed if chainId changes)
-            currProvider = new ethers.providers.Web3Provider(providerToUse, "any");
-            if (dublrContractAddr) {
-                currProvider.on({ address: dublrContractAddr }, onDublrEvent);
+            try {
+                currProvider = new ethers.providers.Web3Provider(providerToUse, "any");
+            } catch (e) {
+                currProvider = providerToUse;
             }
-            currProvider.on("network", onNetwork);
-            currProvider.on("block", onBlock);
+            if (currProvider) {
+                if (dublrContractAddr) {
+                    currProvider.on({ address: dublrContractAddr }, onDublrEvent);
+                }
+                currProvider.on("network", onNetwork);
+                currProvider.on("block", onBlock);
+            }
             
             // Some providers don't set the accounts, need to actively query this here
-            const accounts = await rpcCall(() => currProvider.listAccounts?.());
+            const accounts = await rpcCall(() => currProvider?.listAccounts?.());
             const wallet = accounts && accounts.length > 0 ? accounts[0] : undefined;
             dataflow.set({ wallet, chainId: providerChainId });
         }
