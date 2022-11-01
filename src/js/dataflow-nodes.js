@@ -549,8 +549,7 @@ const dataflowNodes = {
         } else {
             try {
                 providerToUse = ethers.getDefaultProvider("matic", {
-                    alchemy: "v0X3ns9FxubGo7JZ6N54lMsUP841XfiT",
-                    infura: "ba75e2d4e4b64601b9ccd52f91fcc1f1"
+                    alchemy: "v0X3ns9FxubGo7JZ6N54lMsUP841XfiT"
                 });
             } catch (e) {
                 console.log("Cannot connect to default provider for displaying orderbook -- please connect to a wallet");
@@ -566,6 +565,8 @@ const dataflowNodes = {
             try {
                 currProvider = new ethers.providers.Web3Provider(providerToUse, "any");
             } catch (e) {
+                // Succeeds when providerToUse is a wallet, fails when providerToUse is the Ethers
+                // default provider
                 currProvider = providerToUse;
             }
             if (currProvider) {
@@ -622,13 +623,20 @@ const dataflowNodes = {
         }
     },
 
-    dublr: async (provider, chainId, networkName, scanAddress, wallet) => {
+    dublr: async (provider, chainId, network, networkName, scanAddress) => {
         var dublrContractAddr;
-        if (provider && wallet && chainId && networkName) {
-            dublrContractAddr = getDublrAddr(chainId);
+        let currChainId = chainId;
+        if (!currChainId && provider) {
+            currChainId = provider?.chainId;
+        }
+        if (!currChainId && network) {
+            currChainId = network.chainId;
+        }
+        if (provider && currChainId && networkName) {
+            dublrContractAddr = getDublrAddr(currChainId);
             if (!dublrContractAddr) {
                 dataflow.set({
-                    networkInfo_out: "Wallet is connected to network: <span class='num'>" + networkName + "</span>."
+                    networkInfo_out: "Connected to network: <span class='num'>" + networkName + "</span>."
                             + "<br/>However, the Dublr DEX is not deployed on this network."
                             + "<br/>Please connect your wallet to <span class='num'>Polygon Mainnet</span>.",
                     networkInfoIsWarning_out: true,
@@ -644,13 +652,14 @@ const dataflowNodes = {
             });
             return undefined;
         }
-        const contract = new ethers.Contract(dublrContractAddr, dublrABI, provider.getSigner());
+        let signer = provider?.getSigner?.();
+        const contract = new ethers.Contract(dublrContractAddr, dublrABI, signer);
         // Check DUBLR contract is deployed on this network
         const code = await rpcCall(() => provider.getCode(dublrContractAddr));
         if (!code || code.length <= 2) {
             // If code is "0x" then there is no contract currently deployed at address
             dataflow.set({
-                networkInfo_out: "Wallet is connected to network: <span class='num'>" + networkName + "</span>"
+                networkInfo_out: "Connected to network: <span class='num'>" + networkName + "</span>"
                         + "<br/>However, the Dublr DEX is not deployed on this network.",
                 networkInfoIsWarning_out: true,
                 scanURL_out: "https://github.com/dublr/dublr"
@@ -658,7 +667,7 @@ const dataflowNodes = {
             return undefined;
         } else {
             dataflow.set({
-                networkInfo_out: "Wallet is connected to network: <span class='num'>" + networkName + "</span>",
+                networkInfo_out: "Connected to network: <span class='num'>" + networkName + "</span>",
                 networkInfoIsWarning_out: false,
                 scanURL_out:
                         scanAddress === "https://github.com/dublr/dublr" ? scanAddress
@@ -668,8 +677,8 @@ const dataflowNodes = {
         }
     },
 
-    contractVals: async (dublr, wallet, dublrStateTrigger, priceTimerTrigger) => {
-        if (!dublr || !wallet) {
+    contractVals: async (dublr, dublrStateTrigger, priceTimerTrigger) => {
+        if (!dublr) {
             return undefined;
         }
         let values = await rpcCall(() => dublr.callStatic.getStaticCallValues());
