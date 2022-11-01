@@ -527,7 +527,7 @@ let currAllowMinting = true;
 let currProvider;
 
 const dataflowNodes = {
-    provider: async (web3ModalProvider) => {
+    provider: async (web3ModalProvider, initTrigger) => {
         // Remove listeners from current provider, if any
         if (currProvider) {
             const dublrContractAddr = getDublrAddr(currProvider.chainId);
@@ -543,12 +543,27 @@ const dataflowNodes = {
             currProvider = undefined;
         }
         
-        // Add new provider
+        let providerToUse;
         if (web3ModalProvider) {
-            const dublrContractAddr = getDublrAddr(web3ModalProvider.chainId);
+            providerToUse = web3ModalProvider;
+        } else {
+            try {
+                providerToUse = ethers.getDefaultProvider("matic", {
+                    alchemy: "v0X3ns9FxubGo7JZ6N54lMsUP841XfiT",
+                    infura: "ba75e2d4e4b64601b9ccd52f91fcc1f1"
+                });
+            } catch (e) {
+                console.log("Cannot connect to default provider for displaying orderbook -- please connect to a wallet");
+            }
+        }
+        
+        // Add new provider
+        if (providerToUse) {
+            const providerChainId = providerToUse.chainId;
+            const dublrContractAddr = getDublrAddr(providerChainId);
             // "any" parameter: https://github.com/ethers-io/ethers.js/discussions/1480
             // (Although this is not really needed because the app is refreshed if chainId changes)
-            currProvider = new ethers.providers.Web3Provider(web3ModalProvider, "any");
+            currProvider = new ethers.providers.Web3Provider(providerToUse, "any");
             if (dublrContractAddr) {
                 currProvider.on({ address: dublrContractAddr }, onDublrEvent);
             }
@@ -558,7 +573,7 @@ const dataflowNodes = {
             // Some providers don't set the accounts, need to actively query this here
             const accounts = await rpcCall(() => currProvider.listAccounts?.());
             const wallet = accounts && accounts.length > 0 ? accounts[0] : undefined;
-            dataflow.set({ wallet });
+            dataflow.set({ wallet, chainId: providerChainId });
         }
 
         return currProvider;
@@ -648,7 +663,6 @@ const dataflowNodes = {
     },
 
     contractVals: async (dublr, wallet, dublrStateTrigger, priceTimerTrigger) => {
-        console.log("contractVals");
         if (!dublr || !wallet) {
             return undefined;
         }
@@ -1203,7 +1217,7 @@ const dataflowNodes = {
 
     // UI update functions ----------------------------------------------------
 
-    updateNeedToConnect: (dublr, wallet) => {
+    updateNeedToConnect: (dublr, wallet, initTrigger) => {
         dataflow.set({
             needToConnect_out: dublr && wallet
                 ? ""
@@ -1565,8 +1579,12 @@ export function dataflowSetup() {
     // no matter how much data is returned by a function.
     setInterval(() => dataflow.set({ priceTimerTrigger: Date.now() }), 1 * 60 * 1000);
     // Seed the dataflow graph with initial values
-    dataflow.set({ priceTimerTrigger: 0 });
-    dataflow.set({ networkCurrency: "network currency" });
+    dataflow.set({
+        priceTimerTrigger: 0,
+        networkCurrency: "network currency",
+        // Trigger any dataflow node with initTrigger as an argument
+        initTrigger: 1
+    });
 
     // Hook up action buttons    
     document.getElementById("buyButton").onclick = async (event) => {

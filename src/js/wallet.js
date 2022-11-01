@@ -303,7 +303,7 @@ async function onConnectClick() {
         } else {
             // Error connecting to wallet
             dataflow.set({
-                walletConnectionInfo_out: "Could not get a wallet connection: " + msg,
+                walletConnectionInfo_out: "Could not get a wallet connection" + (msg ? ": " + msg : ""),
                 walletConnectionInfoIsWarning_out: true
             });
         }
