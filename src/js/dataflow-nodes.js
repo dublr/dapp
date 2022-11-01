@@ -554,13 +554,13 @@ const dataflowNodes = {
             // Use the default Ethers provider so that the orderbook and depth chart can be displayed
             // even though buying and selling will fail because there is no connected wallet.
             try {
-                providerToUse = new ethers.providers.AlthemyProvider("matic", ALCHEMY_API_KEY);
+                providerToUse = new ethers.providers.AlchemyProvider("matic", ALCHEMY_API_KEY);
                 // The default provider is slow because it's always at its RPC rate limit
                 // providerToUse = ethers.getDefaultProvider("matic", {
                 //     alchemy: ALCHEMY_API_KEY
                 // });
             } catch (e) {
-                console.log("Cannot connect to default provider for displaying orderbook -- please connect to a wallet");
+                console.log("Cannot connect to default provider for displaying orderbook -- please connect to a wallet.", e);
             }
         }
         
