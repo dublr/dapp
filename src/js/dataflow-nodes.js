@@ -530,7 +530,7 @@ let currAllowMinting = true;
 let currProvider;
 
 const dataflowNodes = {
-    provider: async (web3ModalProvider, network, chainId, initTrigger) => {
+    provider: async (web3ModalProvider, chainId, initTrigger) => {
         // Remove listeners from current provider, if any
         if (currProvider) {
             const dublrContractAddr = getDublrAddr(currProvider.chainId);
@@ -571,9 +571,6 @@ const dataflowNodes = {
         // Add new provider
         if (currProvider) {
             let providerChainId = currProvider.chainId;
-            if (!providerChainId && network) {
-                providerChainId = network.chainId;
-            }            
             if (!providerChainId && chainId) {
                 providerChainId = chainId;
             }
