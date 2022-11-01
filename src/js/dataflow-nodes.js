@@ -546,17 +546,21 @@ const dataflowNodes = {
             currProvider = undefined;
         }
         
-        let providerToUse;
         if (web3ModalProvider) {
-            providerToUse = web3ModalProvider;
+            currProvider = web3ModalProvider;
+            try {
+                // "any" parameter: https://github.com/ethers-io/ethers.js/discussions/1480
+                // (Although this is not really needed because the app is refreshed if chainId changes)
+                currProvider = new ethers.providers.Web3Provider(currProvider, "any");
+            } catch (e) {}
         } else {
             // If there is no Web3Modal provider, then the user has not yet connected their wallet.
             // Use the default Ethers provider so that the orderbook and depth chart can be displayed
             // even though buying and selling will fail because there is no connected wallet.
             try {
-                providerToUse = new ethers.providers.AlchemyProvider("matic", ALCHEMY_API_KEY);
+                currProvider = new ethers.providers.AlchemyProvider("matic", ALCHEMY_API_KEY);
                 // The default provider is slow because it's always at its RPC rate limit
-                // providerToUse = ethers.getDefaultProvider("matic", {
+                // currProvider = ethers.getDefaultProvider("matic", {
                 //     alchemy: ALCHEMY_API_KEY
                 // });
             } catch (e) {
@@ -565,8 +569,8 @@ const dataflowNodes = {
         }
         
         // Add new provider
-        if (providerToUse) {
-            let providerChainId = providerToUse.chainId;
+        if (currProvider) {
+            let providerChainId = currProvider.chainId;
             if (!providerChainId && network) {
                 providerChainId = network.chainId;
             }            
@@ -578,14 +582,6 @@ const dataflowNodes = {
                 providerChainId = 137;
             }
             const dublrContractAddr = getDublrAddr(providerChainId);
-            // "any" parameter: https://github.com/ethers-io/ethers.js/discussions/1480
-            // (Although this is not really needed because the app is refreshed if chainId changes)
-            try {
-                currProvider = new ethers.providers.Web3Provider(providerToUse, "any");
-            } catch (e) {
-                // Fails when providerToUse is the Ethers default provider (not connected to a wallet)
-                currProvider = providerToUse;
-            }
             if (currProvider) {
                 if (dublrContractAddr) {
                     // Listen for Dublr contract events
