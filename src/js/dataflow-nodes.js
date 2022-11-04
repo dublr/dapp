@@ -535,6 +535,7 @@ async function estimateGas(dublr, estimateGasPromise,
 let currAllowBuying = true;
 let currAllowMinting = true;
 let currProvider;
+let defaultProviderDublr;
 
 const dataflowNodes = {
     provider: async (web3ModalProvider, chainId,
@@ -558,24 +559,11 @@ const dataflowNodes = {
         if (web3ModalProvider) {
             currProvider = web3ModalProvider;
             try {
+                // Some legacy providers need to be wrapped in Web3Provider for compatibility.
                 // "any" parameter: https://github.com/ethers-io/ethers.js/discussions/1480
-                // (Although this is not really needed because the app is refreshed if chainId changes)
+                // (although "any" parameter is not really needed because the app is refreshed if chainId changes)
                 currProvider = new ethers.providers.Web3Provider(currProvider, "any");
             } catch (e) {}
-        } else {
-            // If there is no Web3Modal provider, then the user has not yet connected their wallet.
-            // Use the default Ethers provider so that the orderbook and depth chart can be displayed
-            // even though buying and selling will fail because there is no connected wallet.
-            try {
-                currProvider = new ethers.providers.AlchemyProvider("matic", ALCHEMY_API_KEY);
-                // The default provider is slow because it's always at its RPC rate limit
-                // currProvider = ethers.getDefaultProvider("matic", {
-                //     alchemy: ALCHEMY_API_KEY,
-                //     infura: "-"                    // Disable Infura, they don't have a free tier for Polygon
-                // });
-            } catch (e) {
-                console.log("Cannot connect to default provider for displaying orderbook -- please connect to a wallet.", e);
-            }
         }
         
         // Add new provider
@@ -589,14 +577,12 @@ const dataflowNodes = {
                 providerChainId = 137;
             }
             const dublrContractAddr = getDublrAddr(providerChainId);
-            if (currProvider) {
-                if (dublrContractAddr) {
-                    // Listen for Dublr contract events
-                    currProvider.on({ address: dublrContractAddr }, onDublrEvent);
-                }
-                currProvider.on("network", onNetwork);
-                currProvider.on("block", onBlock);
+            if (dublrContractAddr) {
+                // Listen for Dublr contract events
+                currProvider.on({ address: dublrContractAddr }, onDublrEvent);
             }
+            currProvider.on("network", onNetwork);
+            currProvider.on("block", onBlock);
             
             // Some providers don't set the accounts, need to actively query this here
             let accounts;
@@ -655,11 +641,12 @@ const dataflowNodes = {
         if (!currChainId && provider) {
             currChainId = provider?.chainId;
         }
-        if (provider && currChainId && networkName) {
+        if (currChainId) {
             dublrContractAddr = getDublrAddr(currChainId);
             if (!dublrContractAddr) {
                 dataflow.set({
-                    networkInfo_out: "Connected to network: <span class='num'>" + networkName + "</span>."
+                    networkInfo_out: "Connected to network: <span class='num'>"
+                            + (networkName ? networkName : "(unknown)") + "</span>."
                             + "<br/>However, the Dublr DEX is not deployed on this network."
                             + "<br/>Please connect your wallet to <span class='num'>Polygon Mainnet</span>.",
                     networkInfoIsWarning_out: true,
@@ -682,24 +669,22 @@ const dataflowNodes = {
         if (!signer) {
             signer = provider?.signer;
         }
-        if (!signer) {
-            // For the default provider (which is a placeholder when no wallet is connected),
-            // there is no signer in the provider. Create a random empty wallet so that at least
-            // static calls will succeed (for fetching the orderbook).
-            signer = await ethers.Wallet.createRandom().connect(provider);
-        }
-        const contract = new ethers.Contract(dublrContractAddr, dublrABI, signer);
-        // Check DUBLR contract is deployed on this network
-        const code = await rpcCall(() => provider.getCode(dublrContractAddr));
-        if (!code || code.length <= 2) {
+        let foundContract = false;
+        let contract;
+        if (signer) {
+            contract = new ethers.Contract(dublrContractAddr, dublrABI, signer);
+            // Check DUBLR contract is deployed on this network
+            const code = await rpcCall(() => provider.getCode(dublrContractAddr));
             // If code is "0x" then there is no contract currently deployed at address
+            foundContract = code && code.length > 2;
+        }
+        if (!foundContract) {
             dataflow.set({
                 networkInfo_out: "Connected to network: <span class='num'>" + networkName + "</span>"
                         + "<br/>However, the Dublr DEX is not deployed on this network.",
                 networkInfoIsWarning_out: true,
                 scanURL_out: "https://github.com/dublr/dublr"
             });
-            return undefined;
         } else {
             dataflow.set({
                 networkInfo_out: "Dublr is deployed to network: <span class='num'>" + networkName + "</span>",
@@ -708,23 +693,20 @@ const dataflowNodes = {
                         scanAddress === "https://github.com/dublr/dublr" ? scanAddress
                         : scanAddress + "address/" + dublrContractAddr
             });
-            return contract;
         }
+        return contract;
     },
 
-    contractVals_fetcher: async (dublr, dublrStateTrigger, priceTimerTrigger) => {
-        // Fetch contract vals in a new Promise, so that dataflow is not blocked
-        new Promise(async () => {
-            let vals;
-            if (dublr) {
-                vals = await rpcCall(() => dublr.callStatic.getStaticCallValues());
+    contractVals: async (dublr, wallet, dublrStateTrigger, priceTimerTrigger) => {
+        let vals;
+        if (dublr) {
+            vals = await rpcCall(() => dublr.callStatic.getStaticCallValues());
+            // Keep using last cached values if RPC call failed, but wallet is still connected
+            if (wallet && !vals) {
+                return dataflow.value.contractVals;
             }
-            // Keep last cached values if RPC call failed
-            if (vals) {
-                // Update contractVals if RPC call succeeded
-                dataflow.set({ contractVals: vals });
-            }
-        });
+        }
+        return vals;
     },
 
     // Available balance for selling (wallet balance plus value of current active sell order, if any)
@@ -768,6 +750,13 @@ const dataflowNodes = {
     },
 
     orderbook: async (contractVals, networkCurrency, priceUSDPerCurrency) => {
+        if (!contractVals && defaultProviderDublr) {
+            // Wallet is not connected to Dublr contract. Try using a default provider.
+            // This will fetch values using a random wallet, so the NWC and DUBLR balances
+            // will be wrong, but they are not needed for fetching the orderbook.
+            // This is used to show the orderbook and depth chart when a wallet is not connected.
+            contractVals = await rpcCall(() => defaultProviderDublr.callStatic.getStaticCallValues());
+        }
         if (!contractVals) {
             return undefined;
         }
@@ -963,6 +952,7 @@ const dataflowNodes = {
         }
         let warningText = "";
         let amountDUBLRWEI = ethToWei(sellAmount_in);
+        const nwc = networkCurrency ? networkCurrency : "in network currency";
         if (totAvailableSellerBalanceDUBLRWEI && totAvailableSellerBalanceDUBLRWEI.isZero()) {
             warningText = "You have no DUBLR tokens to sell";
             amountDUBLRWEI = undefined;
@@ -983,7 +973,7 @@ const dataflowNodes = {
                             + (hasSellOrder ? "(wallet DUBLR balance) + (amount of active sell order) = "
                                     : "wallet balance of ")
                             + weiToEthSF(totAvailableSellerBalanceDUBLRWEI)
-                            + " " + (networkCurrency ? networkCurrency : "");
+                            + " " + nwc;
                     amountDUBLRWEI = undefined;
                 }
             } else {
@@ -999,9 +989,11 @@ const dataflowNodes = {
                         listPriceNWCPerDUBLR_x1e9, contractVals.minSellOrderValueNWCWEI);
                 if (amountDUBLRWEI.lt(minSellOrderValueDUBLRWEI)) {
                     warningText = "Amount cannot be smaller than ("
-                            + weiToEthSF(contractVals.minSellOrderValueNWCWEI) + " ETH) / (list price) = "
+                            + weiToEthSF(contractVals.minSellOrderValueNWCWEI) + " "
+                            + nwc
+                            + ") / (list price) = "
                             + weiToEthSF(minSellOrderValueDUBLRWEI)
-                            + " " + (networkCurrency ? networkCurrency : "");
+                            + " " + nwc;
                     amountDUBLRWEI = undefined;
                 }
             } else {
@@ -1615,12 +1607,27 @@ async function txReceiptLink(receipt) {
 
 let dataflowSetupCompleted = false;
 
-export function dataflowSetup() {
+export async function dataflowSetup() {
     // Only run this setup function once (in case of hot reload in Parcel)
     if (dataflowSetupCompleted) {
         return;
     }
     dataflowSetupCompleted = true;
+
+    // Set up default provider and default signer for when there is no wallet attached    
+    try {
+        let defaultProvider = new ethers.providers.AlchemyProvider("matic", ALCHEMY_API_KEY);
+        // The Ethers default provider is slow because it's always at its RPC rate limit
+        // currProvider = ethers.getDefaultProvider("matic", {
+        //     alchemy: ALCHEMY_API_KEY,
+        //     infura: "-"     // Disable Infura, they don't have a free tier for Polygon
+        // });
+        let defaultSigner = await ethers.Wallet.createRandom().connect(defaultProvider);
+        let dublrContractAddr = getDublrAddr(137);  // 137 == Polygon mainnet
+        defaultProviderDublr = new ethers.Contract(dublrContractAddr, dublrABI, defaultSigner);
+    } catch (e) {
+        console.log("Cannot connect to default provider for displaying orderbook -- please connect to a wallet.", e);
+    }
     
     // Register dataflow functions
     dataflow.register(dataflowNodes);
